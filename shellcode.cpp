@@ -6,55 +6,62 @@
 #include <list>
 #include <sstream>
 
+#include <boost/circular_buffer.hpp>
+
+using namespace std;
+using namespace boost;
+
 /**
-* Specifies the maximum number of legit instructions the plugin keeps track of
-* before control flow is transferred to the shellcode.
-**/
+ * Specifies the maximum number of legit instructions the plugin keeps track of
+ * before control flow is transferred to the shellcode.
+ **/
 const unsigned int MAX_LEGIT_INSTRUCTION_LOG_SIZE = 100;
 
 /**
-* Keeps track of legit instructions before control flow is transferred to she
-* shellcode.
-**/
-std::list<std::string> legitInstructions;
+ * Keeps track of legit instructions before control flow is transferred to she
+ * shellcode.
+ **/
+
+circular_buffer<string> legitInstructions;
 
 /**
-* Keeps track of disassembled instructions that were already dumped.
-**/
-std::set<std::string*> dumped;
+ * Keeps track of disassembled instructions that were already dumped.
+ **/
+set<string*> dumped;
 
 /**
-* Output file the shellcode information is dumped to.
-**/
-std::ofstream traceFile;
+ * Output file the shellcode information is dumped to.
+ **/
+ofstream traceFile;
 
 /**
-* Command line option to specify the name of the output file.
-* Default is shellcode.out.
-**/
-KNOB<string> outputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "shellcode.out", "specify trace file name");
+ * Command line option to specify the name of the output file.
+ * Default is shellcode.out.
+ **/
+KNOB<string> outputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "shellcode.out",
+		"specify trace file name");
 
 /**
-* Prints usage information.
-**/
+ * Prints usage information.
+ **/
 INT32 usage()
 {
-    cerr << "This tool produces a call trace." << endl << endl;
-    cerr << KNOB_BASE::StringKnobSummary() << endl;
-    return -1;
+	cerr << "This tool produces a call trace." << endl << endl;
+	cerr << KNOB_BASE::StringKnobSummary() << endl;
+	return -1;
 }
 
 /**
-* Determines whether a given address belongs to a known module or not.
-**/
+ * Determines whether a given address belongs to a known module or not.
+ **/
 bool isUnknownAddress(ADDRINT address)
 {
 	// An address belongs to a known module, if the address belongs to any
 	// section of any module in the target address space.
 
-	for(IMG img=APP_ImgHead(); IMG_Valid(img); img = IMG_Next(img))
+	for (IMG img = APP_ImgHead(); IMG_Valid(img); img = IMG_Next(img))
 	{
-		for(SEC sec=IMG_SecHead(img); SEC_Valid(sec); sec = SEC_Next(sec))
+		for (SEC sec = IMG_SecHead(img); SEC_Valid(sec); sec = SEC_Next(sec))
 		{
 			if (address >= SEC_Address(sec) && address < SEC_Address(sec) + SEC_Size(sec))
 			{
@@ -67,14 +74,14 @@ bool isUnknownAddress(ADDRINT address)
 }
 
 /**
-* Given a fully qualified path to a file, this function extracts the raw
-* filename and gets rid of the path.
-**/
-std::string extractFilename(const std::string& filename)
+ * Given a fully qualified path to a file, this function extracts the raw
+ * filename and gets rid of the path.
+ **/
+string extractFilename(const string& filename)
 {
-	unsigned int lastBackslash = filename.rfind("\\");
+	size_t lastBackslash = filename.rfind("\\");
 
-	if (lastBackslash == -1)
+	if (lastBackslash == string::npos)
 	{
 		return filename;
 	}
@@ -85,18 +92,18 @@ std::string extractFilename(const std::string& filename)
 }
 
 /**
-* Given an address, this function determines the name of the loaded module the
-* address belongs to. If the address does not belong to any module, the empty
-* string is returned.
-**/
-std::string getModule(ADDRINT address)
+ * Given an address, this function determines the name of the loaded module the
+ * address belongs to. If the address does not belong to any module, the empty
+ * string is returned.
+ **/
+string getModule(ADDRINT address)
 {
 	// To find the module name of an address, iterate over all sections of all
 	// modules until a section is found that contains the address.
 
-	for(IMG img=APP_ImgHead(); IMG_Valid(img); img = IMG_Next(img))
+	for (IMG img = APP_ImgHead(); IMG_Valid(img); img = IMG_Next(img))
 	{
-		for(SEC sec=IMG_SecHead(img); SEC_Valid(sec); sec = SEC_Next(sec))
+		for (SEC sec = IMG_SecHead(img); SEC_Valid(sec); sec = SEC_Next(sec))
 		{
 			if (address >= SEC_Address(sec) && address < SEC_Address(sec) + SEC_Size(sec))
 			{
@@ -109,31 +116,33 @@ std::string getModule(ADDRINT address)
 }
 
 /**
-* Converts a PIN instruction object into a disassembled string.
-**/
-std::string dumpInstruction(INS ins)
+ * Converts a PIN instruction object into a disassembled string.
+ **/
+string dumpInstruction(INS ins)
 {
-	std::stringstream ss;
+	stringstream ss;
 
 	ADDRINT address = INS_Address(ins);
 
 	// Generate address and module information
-	ss << "0x" << setfill('0') << setw(8) << uppercase << hex << address << "::" << getModule(address) << "  ";
+	ss << "0x" << setfill('0') << setw(8) << uppercase << hex << address << "::" << getModule(
+			address) << "  ";
 
 	// Generate instruction byte encoding
-	for (int i=0;i<INS_Size(ins);i++)
+	for (size_t i = 0; i < INS_Size(ins); i++)
 	{
-		ss << setfill('0') << setw(2) << (((unsigned int) *(unsigned char*)(address + i)) & 0xFF) << " ";
+		ss << setfill('0') << setw(2) << (((unsigned int) *(unsigned char*) (address + i)) & 0xFF)
+				<< " ";
 	}
 
-	for (int i=INS_Size(ins);i<8;i++)
+	for (int i = INS_Size(ins); i < 8; i++)
 	{
 		ss << "   ";
 	}
 
 	// Generate diassembled string
 	ss << INS_Disassemble(ins);
-	
+
 	// Look up call information for direct calls
 	if (INS_IsCall(ins) && INS_IsDirectBranchOrCall(ins))
 	{
@@ -144,10 +153,10 @@ std::string dumpInstruction(INS ins)
 }
 
 /**
-* Callback function that is executed every time an instruction identified as
-* potential shellcode is executed.
-**/
-void dump_shellcode(std::string* instructionString)
+ * Callback function that is executed every time an instruction identified as
+ * potential shellcode is executed.
+ **/
+void dump_shellcode(string* instructionString)
 {
 	if (dumped.find(instructionString) != dumped.end())
 	{
@@ -169,7 +178,8 @@ void dump_shellcode(std::string* instructionString)
 
 		traceFile << "Executed before" << endl;
 
-		for (std::list<std::string>::iterator Iter = legitInstructions.begin(); Iter != legitInstructions.end(); ++Iter)
+		for (circular_buffer<string>::iterator Iter = legitInstructions.begin(); Iter
+				!= legitInstructions.end(); ++Iter)
 		{
 			traceFile << *Iter << endl;
 		}
@@ -179,14 +189,14 @@ void dump_shellcode(std::string* instructionString)
 		legitInstructions.clear();
 	}
 
-	traceFile << *instructionString << std::endl;
+	traceFile << *instructionString << endl;
 
 	dumped.insert(instructionString);
 }
 
 /**
-* This function is called
-**/
+ * This function is called
+ **/
 void traceInst(INS ins, VOID*)
 {
 	ADDRINT address = INS_Address(ins);
@@ -198,9 +208,8 @@ void traceInst(INS ins, VOID*)
 		// function is inserted that dumps information to the trace file when
 		// the instruction is actually executed.
 
-		INS_InsertCall(ins, IPOINT_BEFORE, AFUNPTR(dump_shellcode),
-			IARG_PTR, new std::string(dumpInstruction(ins)), IARG_END
-		);
+		INS_InsertCall(ins, IPOINT_BEFORE, AFUNPTR(dump_shellcode), IARG_PTR,
+				new string(dumpInstruction(ins)), IARG_END);
 	}
 	else
 	{
@@ -210,50 +219,72 @@ void traceInst(INS ins, VOID*)
 		// shellcode.
 
 		legitInstructions.push_back(dumpInstruction(ins));
+	}
+}
 
-		if (legitInstructions.size() > MAX_LEGIT_INSTRUCTION_LOG_SIZE)
+VOID OnTraceEvent(TRACE t, VOID *v)
+{
+	// For each basic block on the trace.
+	for (BBL bbl = TRACE_BblHead(t); BBL_Valid(bbl); bbl = BBL_Next(bbl))
+	{
+		for (INS ins = BBL_InsHead(bbl); INS_Valid(ins); ins = INS_Next(ins))
 		{
-			// Log only up to MAX_LEGIT_INSTRUCTION_LOG_SIZE instructions or the whole
-			// program before the shellcode will be dumped.
+			if (isUnknownAddress(INS_Address(ins)))
+			{
+				// The address is an address that does not belong to any loaded module.
+				// This is potential shellcode. For these instructions a callback
+				// function is inserted that dumps information to the trace file when
+				// the instruction is actually executed.
 
-			legitInstructions.pop_front();
+				INS_InsertCall(ins, IPOINT_BEFORE, AFUNPTR(dump_shellcode), IARG_PTR,
+						new string(dumpInstruction(ins)), IARG_END);
+			}
+			else
+			{
+				// The address is a legit address, meaning it is probably not part of
+				// any shellcode. In this case we just log the instruction to dump it
+				// later to show when control flow was transfered from legit code to
+				// shellcode.
+
+				legitInstructions.push_back(dumpInstruction(ins));
+			}
 		}
 	}
 }
 
 /**
-* Finalizer function that is called at the end of the trace process.
-* In this script, the finalizer function is responsible for closing
-* the shellcode output file.
-**/
+ * Finalizer function that is called at the end of the trace process.
+ * In this script, the finalizer function is responsible for closing
+ * the shellcode output file.
+ **/
 VOID fini(INT32, VOID*)
 {
-    traceFile.close();
+	traceFile.close();
 }
 
 int main(int argc, char *argv[])
 {
-    PIN_InitSymbols();
+	PIN_InitSymbols();
 
-    if( PIN_Init(argc, argv))
-    {
-        return usage();
-    }
+	if (PIN_Init(argc, argv))
+	{
+		return usage();
+	}
 
-    traceFile.open(outputFile.Value().c_str());
+	traceFile.open(outputFile.Value().c_str());
 
-    string trace_header = string("#\n"
-                                 "# Shellcode detector\n"
-                                 "#\n");
-    
+	string trace_header = string("#\n"
+		"# Shellcode detector\n"
+		"#\n");
 
-    traceFile.write(trace_header.c_str(), trace_header.size());
-    
-    INS_AddInstrumentFunction(traceInst, 0);
-    PIN_AddFiniFunction(fini, 0);
+	traceFile.write(trace_header.c_str(), trace_header.size());
 
-    // Never returns
-    PIN_StartProgram();
-    
-    return 0;
+	//TRACE_AddInstrumentFunction(OnTraceEvent, 0);
+	INS_AddInstrumentFunction(traceInst, 0);
+	PIN_AddFiniFunction(fini, 0);
+
+	// Never returns
+	PIN_StartProgram();
+
+	return 0;
 }
