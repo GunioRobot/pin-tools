@@ -6,7 +6,10 @@
 #include <list>
 #include <sstream>
 
+#include <boost/foreach.hpp>
 #include <boost/circular_buffer.hpp>
+
+#define foreach BOOST_FOREACH
 
 using namespace std;
 using namespace boost;
@@ -16,7 +19,7 @@ using namespace boost;
  * shellcode.
  **/
 
-circular_buffer<string> legitInstructions;
+circular_buffer<string> legitInstructions(1024);
 
 /**
  * Keeps track of disassembled instructions that were already dumped.
@@ -73,7 +76,13 @@ bool isUnknownAddress(ADDRINT address)
  **/
 string extractFilename(const string& filename)
 {
-	size_t lastBackslash = filename.rfind("\\");
+#ifdef _WIN32
+#define PATH_SEPARATOR "\\"
+#else
+#define PATH_SEPARATOR "/"
+#endif
+
+	size_t lastBackslash = filename.rfind(PATH_SEPARATOR);
 
 	if (lastBackslash == string::npos)
 	{
@@ -163,57 +172,9 @@ void dump_shellcode(string &instructionString)
 		return;
 	}
 
-	if (!legitInstructions.empty())
-	{
-		// If legit instructions have been logged before the shellcode is
-		// executed, it is now a good time to dump them to the file. This
-		// information then shows when control flow was transferred from
-		// legit code to shellcode.
-
-		traceFile << "Executed before" << endl;
-
-		for (circular_buffer<string>::iterator Iter = legitInstructions.begin(); Iter
-				!= legitInstructions.end(); ++Iter)
-		{
-			traceFile << *Iter << endl;
-		}
-
-		traceFile << endl << "Shellcode:" << endl;
-
-		legitInstructions.clear();
-	}
-
 	traceFile << instructionString << endl;
 
 	dumped.insert(instructionString);
-}
-
-/**
- * This function is called
- **/
-void traceInst(INS ins, VOID*)
-{
-	ADDRINT address = INS_Address(ins);
-
-	if (isUnknownAddress(address))
-	{
-		// The address is an address that does not belong to any loaded module.
-		// This is potential shellcode. For these instructions a callback
-		// function is inserted that dumps information to the trace file when
-		// the instruction is actually executed.
-
-		INS_InsertCall(ins, IPOINT_BEFORE, AFUNPTR(dump_shellcode), IARG_PTR,
-				new string(dumpInstruction(ins)), IARG_END);
-	}
-	else
-	{
-		// The address is a legit address, meaning it is probably not part of
-		// any shellcode. In this case we just log the instruction to dump it
-		// later to show when control flow was transfered from legit code to
-		// shellcode.
-
-		legitInstructions.push_back(dumpInstruction(ins));
-	}
 }
 
 VOID OnTraceEvent(TRACE t, VOID *v)
@@ -241,6 +202,7 @@ VOID OnTraceEvent(TRACE t, VOID *v)
 				// shellcode.
 
 				legitInstructions.push_back(dumpInstruction(ins));
+				//cout << legitInstructions.size() << endl;
 			}
 		}
 	}
@@ -253,6 +215,19 @@ VOID OnTraceEvent(TRACE t, VOID *v)
  **/
 VOID fini(INT32, VOID*)
 {
+
+	// If legit instructions have been logged before the shellcode is
+	// executed, it is now a good time to dump them to the file. This
+	// information then shows when control flow was transferred from
+	// legit code to shellcode.
+
+	traceFile << "Executed before" << endl;
+
+	foreach(string str, legitInstructions)
+	{
+		traceFile << str << endl;
+	}
+
 	traceFile.close();
 }
 
@@ -273,8 +248,8 @@ int main(int argc, char *argv[])
 
 	traceFile.write(trace_header.c_str(), trace_header.size());
 
-	//TRACE_AddInstrumentFunction(OnTraceEvent, 0);
-	INS_AddInstrumentFunction(traceInst, 0);
+	TRACE_AddInstrumentFunction(OnTraceEvent, 0);
+	//INS_AddInstrumentFunction(traceInst, 0);
 	PIN_AddFiniFunction(fini, 0);
 
 	// Never returns
