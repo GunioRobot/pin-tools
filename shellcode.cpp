@@ -12,12 +12,6 @@ using namespace std;
 using namespace boost;
 
 /**
- * Specifies the maximum number of legit instructions the plugin keeps track of
- * before control flow is transferred to the shellcode.
- **/
-const unsigned int MAX_LEGIT_INSTRUCTION_LOG_SIZE = 100;
-
-/**
  * Keeps track of legit instructions before control flow is transferred to she
  * shellcode.
  **/
@@ -27,7 +21,7 @@ circular_buffer<string> legitInstructions;
 /**
  * Keeps track of disassembled instructions that were already dumped.
  **/
-set<string*> dumped;
+set<string> dumped;
 
 /**
  * Output file the shellcode information is dumped to.
@@ -156,7 +150,7 @@ string dumpInstruction(INS ins)
  * Callback function that is executed every time an instruction identified as
  * potential shellcode is executed.
  **/
-void dump_shellcode(string* instructionString)
+void dump_shellcode(string &instructionString)
 {
 	if (dumped.find(instructionString) != dumped.end())
 	{
@@ -189,7 +183,7 @@ void dump_shellcode(string* instructionString)
 		legitInstructions.clear();
 	}
 
-	traceFile << *instructionString << endl;
+	traceFile << instructionString << endl;
 
 	dumped.insert(instructionString);
 }
