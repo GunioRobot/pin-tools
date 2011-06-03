@@ -5,6 +5,7 @@
 #include <set>
 #include <list>
 #include <sstream>
+#include <vector>
 
 #include <boost/foreach.hpp>
 #include <boost/circular_buffer.hpp>
@@ -14,11 +15,14 @@
 using namespace std;
 using namespace boost;
 
+vector<string> shellcode_buffer(1024 * 8);
+
+vector<ADDRINT> shadow_stack(1024);
+
 /**
  * Keeps track of legit instructions before control flow is transferred to she
  * shellcode.
  **/
-
 circular_buffer<string> legitInstructions(1024);
 
 /**
@@ -30,6 +34,8 @@ set<string> dumped;
  * Output file the shellcode information is dumped to.
  **/
 ofstream traceFile;
+
+bool shellcode_detected = false;
 
 /**
  * Command line option to specify the name of the output file.
@@ -161,20 +167,44 @@ string dumpInstruction(INS ins)
  **/
 void dump_shellcode(string &instructionString)
 {
+	// This check makes sure that an instruction is not dumped twice.
+	// For a complete run trace it would make sense to dump an instruction
+	// every time it is executed. However, imagine the shellcode has a
+	// tight loop that is executed a million times. The resulting log file
+	// is much easier to read if every instruction is only dumped once.
 	if (dumped.find(instructionString) != dumped.end())
-	{
-		// This check makes sure that an instruction is not dumped twice.
-		// For a complete run trace it would make sense to dump an instruction
-		// every time it is executed. However, imagine the shellcode has a
-		// tight loop that is executed a million times. The resulting log file
-		// is much easier to read if every instruction is only dumped once.
-
 		return;
-	}
 
-	traceFile << instructionString << endl;
+	shellcode_buffer.push_back(instructionString);
 
 	dumped.insert(instructionString);
+}
+
+void instrument_call(ADDRINT next_address)
+{
+#ifdef DEBUG
+	cout << "Added return address to the stack" << (void *) next_address << '\n';
+#endif
+
+	shadow_stack.push_back(next_address);
+}
+
+void instrument_ret(ADDRINT ret_address)
+{
+	ADDRINT popped = shadow_stack.back();
+	shadow_stack.pop_back();
+
+#ifdef DEBUG
+	cout << "Popped return address from the stack" << (void *) popped << '\n';
+#endif
+
+	if (ret_address != popped)
+	{
+		cout << "Return address and poped address does not match" << '\n';
+		cout << "ret_address = " << (void *) ret_address << " ; popped = " << (void *) popped
+				<< '\n';
+		shellcode_detected = true;
+	}
 }
 
 VOID OnTraceEvent(TRACE t, VOID *v)
@@ -184,25 +214,28 @@ VOID OnTraceEvent(TRACE t, VOID *v)
 	{
 		for (INS ins = BBL_InsHead(bbl); INS_Valid(ins); ins = INS_Next(ins))
 		{
-			if (isUnknownAddress(INS_Address(ins)))
+			// An unknown address is potentially shellcode
+			if (shellcode_detected || isUnknownAddress(INS_Address(ins)))
 			{
-				// The address is an address that does not belong to any loaded module.
-				// This is potential shellcode. For these instructions a callback
-				// function is inserted that dumps information to the trace file when
-				// the instruction is actually executed.
-
 				INS_InsertCall(ins, IPOINT_BEFORE, AFUNPTR(dump_shellcode), IARG_PTR,
 						new string(dumpInstruction(ins)), IARG_END);
 			}
 			else
 			{
-				// The address is a legit address, meaning it is probably not part of
-				// any shellcode. In this case we just log the instruction to dump it
-				// later to show when control flow was transfered from legit code to
-				// shellcode.
+				if (INS_IsCall(ins))
+				{
+					// save the return address
+					INS_InsertCall(ins, IPOINT_BEFORE, AFUNPTR(instrument_call), IARG_ADDRINT,
+							INS_NextAddress(ins), IARG_END);
+				}
+				else if (INS_IsRet(ins))
+				{
+					// verify the return address
+					INS_InsertCall(ins, IPOINT_BEFORE, AFUNPTR(instrument_ret),
+							IARG_BRANCH_TARGET_ADDR, IARG_END);
+				}
 
 				legitInstructions.push_back(dumpInstruction(ins));
-				//cout << legitInstructions.size() << endl;
 			}
 		}
 	}
@@ -221,12 +254,20 @@ VOID fini(INT32, VOID*)
 	// information then shows when control flow was transferred from
 	// legit code to shellcode.
 
-	traceFile << "Executed before" << endl;
+	traceFile << "== Legitimate instructions executed before shellcode was detected ==" << endl;
 
-	foreach(string str, legitInstructions)
-	{
-		traceFile << str << endl;
-	}
+	foreach(string &str, legitInstructions)
+				{
+					traceFile << str << '\n';
+				}
+
+	traceFile << "\n\n== Begin shellcode dump ==" << '\n';
+
+	foreach(string &str, shellcode_buffer)
+				{
+					if (str != "")
+						traceFile << str << '\n';
+				}
 
 	traceFile.close();
 }
@@ -242,17 +283,12 @@ int main(int argc, char *argv[])
 
 	traceFile.open(outputFile.Value().c_str());
 
-	string trace_header = string("#\n"
-		"# Shellcode detector\n"
-		"#\n");
+	string trace_header = "# Shellcode detector";
 
 	traceFile.write(trace_header.c_str(), trace_header.size());
 
 	TRACE_AddInstrumentFunction(OnTraceEvent, 0);
-	//INS_AddInstrumentFunction(traceInst, 0);
 	PIN_AddFiniFunction(fini, 0);
-
-	// Never returns
 	PIN_StartProgram();
 
 	return 0;
