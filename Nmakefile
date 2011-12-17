@@ -21,4 +21,4 @@ INCLUDE=$(BOOST_DIR);$(INCLUDE)
 # Include building and testing rules from the root Nmakefile.
 ######################################################################################
 INCLUDE_SUB_RULES=1
-!INCLUDE $(PIN_HOME)\Nmakefile 
+!INCLUDE $(PIN_HOME)\Nmakefile
